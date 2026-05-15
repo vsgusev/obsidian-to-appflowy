@@ -84,6 +84,7 @@ Examples:
     )
 
     args = parser.parse_args()
+    args.vault = args.vault.expanduser().resolve()
 
     if not args.vault.exists():
         print(f"Error: vault path does not exist: {args.vault}", file=sys.stderr)
@@ -120,6 +121,9 @@ Examples:
             skip_images=args.skip_images,
             dry_run=args.dry_run,
         )
+    except KeyboardInterrupt:
+        print("\nCancelled.", file=sys.stderr)
+        sys.exit(130)
     except requests.HTTPError as e:
         resp = e.response
         print("Error: AppFlowy returned an HTTP error.", file=sys.stderr)
