@@ -39,6 +39,7 @@ Built for one-time migrations. Your Obsidian files are never modified.
 | Horizontal rules `---` | Divider blocks |
 | Markdown tables | `simple_table` blocks |
 | **bold**, *italic*, ~~strike~~, `code`, ==highlight==, [links] | Inline formatting |
+| HTML inline tags `<u>`, `<b>`, `<i>`, `<s>`, `<mark>`, `<a href>`, `<br>` | Mapped to AppFlowy formatting (underline / bold / italic / strikethrough / highlight / link / space) |
 | Frontmatter `--- ... ---` | Preserved as a YAML code block at the top |
 | Wikilinks `[[Note]]` / `[[Note\|Alias]]` | Page links (clicking navigates to the page) |
 | `![[img.png]]`, `![alt](path)` | Uploaded image blocks |
@@ -96,6 +97,7 @@ Password is prompted if not passed via `--password` or `$APPFLOWY_PASSWORD`.
 - **Tags** — `#tag` stays as plain text
 - **Callouts** — `> [!NOTE]` becomes a plain quote block
 - **Plugins** — Dataview, Kanban, Excalidraw and other plugin syntax appear as plain text
+- **HTML** — only inline tags listed in the migration table are mapped; block-level HTML (`<details>`, `<table>`, `<iframe>`, etc.) and unsupported inline tags (`<sup>`, `<sub>`, `<span>`) keep their content but lose styling
 - **Duplicate image filenames** — if two images share a name, only one is used; a warning prints to stderr
 - **Edge cases:**
   - Duplicate page names — wikilinks resolve by filename stem, so `[[Note]]` is ambiguous if two `Note.md` exist in different folders (the first one wins)

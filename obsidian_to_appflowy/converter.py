@@ -13,6 +13,7 @@ Handles:
 
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
 
@@ -47,7 +48,25 @@ _INLINE_RE = re.compile(
 
 
 def parse_inline(text: str, page_ids: dict[str, str] | None = None) -> list[dict]:
-    """Convert inline markdown to a list of Quill delta ops."""
+    """Convert inline text (markdown + HTML) to AppFlowy delta ops.
+
+    Routes through the HTML parser when the text contains anything that
+    looks like a tag, otherwise runs the regex-based markdown parser
+    directly. Obsidian semantic — markdown does NOT render inside HTML
+    elements — is honoured: text inside HTML tags is opaque.
+    """
+    if _RE_HAS_HTML_TAG.search(text):
+        def md_only(chunk: str) -> list[dict]:
+            return _parse_markdown_inline(chunk, page_ids)
+        parser = _HtmlToDelta(md_only)
+        parser.feed(text)
+        parser.close()
+        return parser.ops or [{"insert": ""}]
+    return _parse_markdown_inline(text, page_ids) or [{"insert": ""}]
+
+
+def _parse_markdown_inline(text: str, page_ids: dict[str, str] | None = None) -> list[dict]:
+    """Pure markdown inline parser — does not look at HTML tags."""
     ops: list[dict] = []
     for m in _INLINE_RE.finditer(text):
         (bold_ul, bold_ast, italic_ul, italic_ast, strike, highlight, code,
@@ -86,7 +105,93 @@ def parse_inline(text: str, page_ids: dict[str, str] | None = None) -> list[dict
             ops.append({"insert": bare_url, "attributes": {"href": bare_url}})
         elif plain:
             ops.append({"insert": plain})
-    return ops or [{"insert": ""}]
+    return ops
+
+
+# ── HTML inline parser ────────────────────────────────────────────────────────
+
+# Maps known inline HTML tags to AppFlowy delta attributes. Obsidian
+# officially supports inline HTML; see https://obsidian.md/help/Editing+and+formatting/HTML+content
+_TAG_TO_ATTR: dict[str, tuple[str, str | bool]] = {
+    "u":      ("underline",     True),
+    "b":      ("bold",          True),
+    "strong": ("bold",          True),
+    "i":      ("italic",        True),
+    "em":     ("italic",        True),
+    "s":      ("strikethrough", True),
+    "strike": ("strikethrough", True),
+    "del":    ("strikethrough", True),
+    "mark":   ("bg_color",      _HIGHLIGHT_BG),
+    "code":   ("code",          True),
+}
+
+# Cheap detector — only routes to HTML parser if the text looks like it
+# might contain a tag. Avoids paying for HTMLParser on every line.
+_RE_HAS_HTML_TAG = re.compile(r"<\w+\b[^>]*/?>", re.IGNORECASE)
+
+
+class _HtmlToDelta(HTMLParser):
+    """Convert a chunk of inline text with HTML tags to AppFlowy delta ops.
+
+    - Known tags (see _TAG_TO_ATTR) wrap their content with the corresponding
+      delta attribute.
+    - <a href="..."> becomes a link.
+    - <br>/<br/> becomes a single space (delta has no inline newline).
+    - Unknown tags are stripped, content preserved as opaque text.
+    - Text outside any tag is parsed as markdown via the `md_parser` callback.
+    - Text inside any tag is opaque (Obsidian semantic: markdown does not
+      render inside HTML).
+    """
+
+    def __init__(self, md_parser: Callable[[str], list[dict]]):
+        super().__init__(convert_charrefs=True)
+        self.ops: list[dict] = []
+        self.attr_stack: list[dict] = []
+        self._md = md_parser
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag == "br":
+            self._emit(" ")
+            return  # void element — no push
+        if tag in _TAG_TO_ATTR:
+            key, value = _TAG_TO_ATTR[tag]
+            self.attr_stack.append({key: value})
+        elif tag == "a":
+            href = dict(attrs).get("href")
+            self.attr_stack.append({"href": href} if href else {})
+        else:
+            self.attr_stack.append({})  # unknown tag — content kept, no attr
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "br":
+            return  # void — nothing to pop
+        if self.attr_stack:
+            self.attr_stack.pop()
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # Self-closing forms like <br/>.
+        if tag.lower() == "br":
+            self._emit(" ")
+
+    def handle_data(self, data: str) -> None:
+        if not data:
+            return
+        if not self.attr_stack:
+            self.ops.extend(self._md(data))
+        else:
+            self._emit(data)
+
+    def _emit(self, text: str) -> None:
+        if not text:
+            return
+        merged: dict = {}
+        for attrs in self.attr_stack:
+            merged.update(attrs)
+        op: dict = {"insert": text}
+        if merged:
+            op["attributes"] = merged
+        self.ops.append(op)
 
 
 # ── Frontmatter stripper ──────────────────────────────────────────────────────

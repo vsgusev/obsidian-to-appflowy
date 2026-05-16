@@ -449,3 +449,123 @@ def test_table_structure() -> None:
     assert cells[0]["type"] == "simple_table_cell"
     name_text = "".join(op["insert"] for op in cells[0]["children"][0]["data"]["delta"])
     assert name_text == "Name"
+
+
+# ── Inline HTML tags ──────────────────────────────────────────────────────────
+
+def _attrs_of(ops: list, text: str) -> dict:
+    """Find the op matching `text` and return its attributes (empty if none)."""
+    for op in ops:
+        if op["insert"] == text:
+            return op.get("attributes", {})
+    raise AssertionError(f"no op with insert={text!r}; got {ops!r}")
+
+
+def test_html_u_becomes_underline() -> None:
+    ops = parse_inline("a <u>under</u> b")
+    assert _attrs_of(ops, "under") == {"underline": True}
+
+
+def test_html_b_and_strong_become_bold() -> None:
+    assert _attrs_of(parse_inline("<b>x</b>"), "x") == {"bold": True}
+    assert _attrs_of(parse_inline("<strong>y</strong>"), "y") == {"bold": True}
+
+
+def test_html_i_and_em_become_italic() -> None:
+    assert _attrs_of(parse_inline("<i>x</i>"), "x") == {"italic": True}
+    assert _attrs_of(parse_inline("<em>y</em>"), "y") == {"italic": True}
+
+
+def test_html_s_strike_del_become_strikethrough() -> None:
+    assert _attrs_of(parse_inline("<s>x</s>"), "x") == {"strikethrough": True}
+    assert _attrs_of(parse_inline("<strike>y</strike>"), "y") == {"strikethrough": True}
+    assert _attrs_of(parse_inline("<del>z</del>"), "z") == {"strikethrough": True}
+
+
+def test_html_mark_becomes_highlight() -> None:
+    attrs = _attrs_of(parse_inline("<mark>yellow</mark>"), "yellow")
+    assert attrs.get("bg_color") == "0x4dffeb3b"
+
+
+def test_html_code_becomes_code_attribute() -> None:
+    assert _attrs_of(parse_inline("<code>snippet</code>"), "snippet") == {"code": True}
+
+
+def test_html_a_becomes_link_with_href() -> None:
+    ops = parse_inline('see <a href="https://example.com">site</a>')
+    assert _attrs_of(ops, "site") == {"href": "https://example.com"}
+
+
+def test_html_a_without_href_strips_tag() -> None:
+    # <a> without href becomes a no-op wrapper — content kept as plain text.
+    ops = parse_inline("<a>just text</a>")
+    text = "".join(op["insert"] for op in ops)
+    assert text == "just text"
+    assert all("href" not in op.get("attributes", {}) for op in ops)
+
+
+def test_html_br_becomes_space() -> None:
+    text = "".join(op["insert"] for op in parse_inline("line one<br>line two"))
+    assert text == "line one line two"
+
+
+def test_html_br_self_closing_variants() -> None:
+    # <br>, <br/>, <br /> should all behave the same.
+    for variant in ("<br>", "<br/>", "<br />"):
+        text = "".join(op["insert"] for op in parse_inline(f"a{variant}b"))
+        assert text == "a b", f"failed for variant {variant!r}"
+
+
+def test_html_nested_tags_combine_attributes() -> None:
+    ops = parse_inline("<b><i>both</i></b>")
+    attrs = _attrs_of(ops, "both")
+    assert attrs.get("bold") is True
+    assert attrs.get("italic") is True
+
+
+def test_html_case_insensitive() -> None:
+    assert _attrs_of(parse_inline("<U>x</U>"), "x") == {"underline": True}
+    assert _attrs_of(parse_inline("<B>x</B>"), "x") == {"bold": True}
+
+
+def test_html_tag_with_extra_attributes_still_parses() -> None:
+    # Real-world clipper output has class/style/etc on tags.
+    ops = parse_inline('<a href="https://x.com" class="external" target="_blank">link</a>')
+    assert _attrs_of(ops, "link") == {"href": "https://x.com"}
+
+
+def test_markdown_outside_html_is_still_parsed() -> None:
+    ops = parse_inline("**bold** <u>under</u> *italic*")
+    assert _attrs_of(ops, "bold") == {"bold": True}
+    assert _attrs_of(ops, "under") == {"underline": True}
+    assert _attrs_of(ops, "italic") == {"italic": True}
+
+
+def test_markdown_inside_html_stays_literal() -> None:
+    # Obsidian semantic: markdown does not render inside HTML elements.
+    ops = parse_inline("<u>**not bold**</u>")
+    text = "".join(op["insert"] for op in ops)
+    assert "**" in text  # the asterisks are preserved as literal characters
+    assert "not bold" in text
+
+
+def test_unknown_html_tag_preserves_content() -> None:
+    # <sup>, <details>, etc. — strip the tag, keep the text.
+    ops = parse_inline("E = mc<sup>2</sup>")
+    text = "".join(op["insert"] for op in ops)
+    assert text == "E = mc2"
+
+
+def test_text_with_less_than_but_no_tag_works() -> None:
+    # Inequality `<` that isn't a tag start should not break parsing.
+    ops = parse_inline("if x < y then ok")
+    text = "".join(op["insert"] for op in ops)
+    assert text == "if x < y then ok"
+
+
+def test_html_underline_in_list_item() -> None:
+    # The original bug report: <u>...</u> inside a list item.
+    page = md_to_blocks("- a <u>дальше</u> b", {}, None)
+    bullet = page["children"][0]
+    assert bullet["type"] == "bulleted_list"
+    assert _attrs_of(bullet["data"]["delta"], "дальше") == {"underline": True}
