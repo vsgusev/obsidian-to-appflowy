@@ -105,17 +105,6 @@ Password is prompted if not passed via `--password` or `$APPFLOWY_PASSWORD`.
   - YAML frontmatter with a `---` line inside a value may be only partially captured
   - Fenced code indented under a list bullet is not detected as a code block
 
-## Development
-
-```bash
-pip install -e ".[dev]"
-pytest
-```
-
-## Contributing
-
-Open an issue before sending a PR. No AI-generated PRs.
-
 ## License
 
 [MIT](LICENSE)
